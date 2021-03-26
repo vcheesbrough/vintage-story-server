@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+  DuckdnsDomain:
+    Type: String
+  DuckdnsToken:
+    Type: String
+
+Resources: 
+  GameServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: t3.micro
+      KeyName: vincent@ryzen
+      SecurityGroups:
+      - Ref: GameServerSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           sudo adduser --shell /bin/bash duckdns
+           yum update -y aws-cfn-bootstrap
+           /opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource GameServer --region ${AWS::Region}
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}
+
+    Metadata: 
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum: 
+              htop: []
+          files:
+            /home/duckdns/duck.sh:
+              content: !Sub |
+                #!/bin/bash
+                current=""
+                while true; do
+                  latest=`ec2-metadata --public-ipv4`
+                  echo "public-ipv4=$latest"
+                  if [ "$current" == "$latest" ]
+                  then
+                    echo "ip not changed"
+                  else
+                    echo "ip has changed - updating"
+                    current=$latest
+                    echo url="https://www.duckdns.org/update?domains=${DuckdnsDomain}&token=${DuckdnsToken}&ip=" | curl -k -o ~/duck.log -K -
+                  fi
+                  sleep 5m
+                done       
+              mode: "000700"
+              owner: "duckdns"
+              group: "duckdns"
+            /usr/lib/systemd/system/duckdns.service:
+              content: !Sub |
+                [Unit]
+                Description=Duckdns updater
+                After=network.target
+                
+                [Service]
+                WorkingDirectory=/home/duckdns
+                ExecStart=/home/duckdns/duck.sh
+                Restart=always
+                RestartSec=30
+                StandardOutput=syslog
+                StandardError=syslog
+                SyslogIdentifier=duck.sh
+                User=duckdns
+                Group=duckdns
+                
+                [Install]
+                WantedBy=multi-user.target
+              mode: "000644"
+              owner: "duckdns"
+              group: "duckdns"
+          commands:
+            start-duckdns:
+              command: "sudo systemctl enable duckdns.service;sudo systemctl start duckdns.service"
+
+  GameServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Enable Vintage Story Server port and ssh only for IP4/6"
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: '42420'
+        IpProtocol: tcp
+        ToPort: '42420'
+      - CidrIpv6: ::/0
+        FromPort: '42420'
+        IpProtocol: tcp
+        ToPort: '42420'
+      - CidrIp: 0.0.0.0/0
+        FromPort: '22'
+        IpProtocol: tcp
+        ToPort: '22'
+      - CidrIpv6: ::/0
+        FromPort: '22'
+        IpProtocol: tcp
+        ToPort: '22'      
+Outputs:
+  PublicIp:
+    Description: GameServer Public IP
+    Value: !GetAtt GameServer.PublicIp
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicIp"
