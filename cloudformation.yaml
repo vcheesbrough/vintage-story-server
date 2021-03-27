@@ -1,4 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
+#/var/log/cfn-init-cmd.log: cfn-init and command output with timestamps
+#/var/log/cfn-init.log: cfn-init and command output
+#/var/log/cloud-init.log: cloud init logs pertaining to running the commands in user-data
+#/var/log/cloud-init-output.log: output from the user-data commands themselves
+
 Parameters:
   LatestAmiId:
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
@@ -7,13 +12,18 @@ Parameters:
     Type: String
   DuckdnsToken:
     Type: String
+  VintageStoryDownloadUrl:
+    Type: String
+    Default: https://cdn.vintagestory.at/gamefiles/stable/vs_server_1.14.8.tar.gz
+  VintageStoryServerPassword:
+    Type: String
 
 Resources: 
   GameServer:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref LatestAmiId
-      InstanceType: t3.micro
+      InstanceType: t3.small
       KeyName: vincent@ryzen
       SecurityGroups:
       - Ref: GameServerSecurityGroup
@@ -21,12 +31,31 @@ Resources:
         Fn::Base64: !Sub |
            #!/bin/bash -xe
            sudo adduser --shell /bin/bash duckdns
+           sudo adduser --shell /bin/bash vintagestory
            yum update -y aws-cfn-bootstrap
            /opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource GameServer --region ${AWS::Region}
            sudo yum install -y yum-utils
            sudo rpm --import "http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF"
            sudo yum-config-manager --add-repo http://download.mono-project.com/repo/centos/
            sudo yum install -y mono-devel
+           sudo mkdir /opt/vintagestoryserver
+           cd /opt/vintagestoryserver
+           sudo curl https://cdn.vintagestory.at/gamefiles/stable/vs_server_1.14.8.tar.gz | sudo tar -xzf -
+           sudo chown -R vintagestory:vintagestory /opt/vintagestoryserver
+           (
+              sleep 60
+              echo /op FifthColumnist
+              echo /op n33712
+              echo /serverconfig password ${VintageStoryServerPassword}
+              echo /serverconfig name ${DuckdnsDomain}
+              echo /serverconfig advertise 1
+              echo /worldConfig propickNodeSearchRadius 6
+              sleep 30
+              echo /stop
+           )|sudo -u vintagestory -- sh -c 'cd /opt/vintagestoryserver;/usr/bin/mono VintagestoryServer.exe --dataPath /home/vintagestory/game-data'
+           sudo systemctl restart rsyslog.service
+           sudo systemctl enable vintagestoryserver.service
+           sudo systemctl start vintagestoryserver.service
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}
@@ -80,6 +109,60 @@ Resources:
               mode: "000644"
               owner: "duckdns"
               group: "duckdns"
+            /usr/lib/systemd/system/vintagestoryserver.service:
+              content: !Sub |
+                [Unit]
+                Description=Vintage Story Server Unit
+                After=network.target
+                
+                [Service]
+                WorkingDirectory=/opt/vintagestoryserver
+                ExecStart=/usr/bin/mono VintagestoryServer.exe --dataPath /home/vintagestory/game-data
+                Restart=always
+                RestartSec=30
+                StandardOutput=syslog
+                StandardError=syslog
+                SyslogIdentifier=VSSRV
+                User=vintagestory
+                Group=vintagestory
+                
+                [Install]
+                WantedBy=multi-user.target                
+              mode: "000644"
+              owner: "vintagestory"
+              group: "vintagestory"
+            /etc/rsyslog.d/vintagestoryserver.conf:
+              content: !Sub |
+                if $programname == 'VSSRV' then {
+                    if($msg contains "Chat") then {
+                        action(type="omfile" dirCreateMode="0755" FileCreateMode="0644" File="/var/log/vintagestory-server/chat.log")
+                    } else if($msg contains "verließ") then {
+                        action(type="omfile" dirCreateMode="0755" FileCreateMode="0644" File="/var/log/vintagestory-server/login.log")
+                    } else if($msg contains "join") then {
+                        action(type="omfile" dirCreateMode="0755" FileCreateMode="0644" File="/var/log/vintagestory-server/login.log")
+                    } else if($msg contains "Server Warning") then {
+                        action(type="omfile" dirCreateMode="0755" FileCreateMode="0644" File="/var/log/vintagestory-server/warn.log")
+                    } else if($msg contains "Server Notification") then {
+                        action(type="omfile" dirCreateMode="0755" FileCreateMode="0644" File="/var/log/vintagestory-server/info.log")
+                    } else if($msg contains "Server Debug") then {
+                        action(type="omfile" dirCreateMode="0755" FileCreateMode="0644" File="/var/log/vintagestory-server/debug.log")
+                    } else if($msg contains "Server Event") then {
+                        action(type="omfile" dirCreateMode="0755" FileCreateMode="0644" File="/var/log/vintagestory-server/event.log")
+                    } else {
+                        action(type="omfile" dirCreateMode="0755" FileCreateMode="0644" File="/var/log/vintagestory-server/other.log")
+                    }
+                }
+                # Discard 
+                if $programname == 'VSSRV' then ~              
+              mode: "000644"
+              owner: "vintagestory"
+              group: "vintagestory"
+            /home/vintagestory/.ssh/authorized_keys:
+              content: !Sub |
+                ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDjDkDH1Yk1e+0eM0TbGKkpjbq9o8WL5sEeMQ44iRrNevvmzc0/6+OTl3RNHLlXzlwbhY5EOpxSIWs57vigqdOl2blx7Ovi1DsXGkooXSSfld0NrTCo4lqWl6u37FIAbc4ijH6a4Fh0Lz9MNlrbcyApyorGye47cvJ6pS4A93Gbo22CY27Rz/VYPjJA3bNNu14/2No4lp44cichIoJWqX5nuSZto1pp+77NT9EjWto/TWAsb5I+mFhGoK2Hs+c6QLQGhFsM8RMkA5eSbAAUk+rQJfKJVJGXOC0VQA045Xu2hnAhDEyq0Awt6NkV5R+C6ZmlydPTwwbeJ0Uub+l1LyzP vince@Ryzen
+              mode: "000700"
+              owner: "vintagestory"
+              group: "vintagestory"
           commands:
             start-duckdns:
               command: "sudo systemctl enable duckdns.service;sudo systemctl start duckdns.service"
