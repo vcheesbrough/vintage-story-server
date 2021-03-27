@@ -19,6 +19,69 @@ Parameters:
     Type: String
 
 Resources: 
+  GameSavesBackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - NoncurrentVersionExpirationInDays: 7
+            Status: Enabled
+
+#  GameSavesBackupBucketPolicy:
+#    Type: AWS::S3::BucketPolicy
+#    Properties:
+#      Bucket: !Ref GameSavesBackupBucket
+#      PolicyDocument:
+#        Statement:
+#          - Action:
+#              - 's3:*'
+#            Effect: Allow
+#            Resource: !Join
+#              - ''
+#              - - 'arn:aws:s3:::'
+#                - !Ref GameSavesBackupBucket
+#                - /*
+#            Principal: '*'
+#            Condition:
+#              StringLike:
+#                'aws:Referer':
+#                  - 'http://www.example.com/*'
+#                  - 'http://example.net/*'
+  GameServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+
+  GameServerRolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: s3
+      Roles:
+      - Ref: GameServerRole
+      PolicyDocument:
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:*
+          Resource: "*"
+
+  GameServerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref GameServerRole
+
   GameServer:
     Type: AWS::EC2::Instance
     Properties:
@@ -27,6 +90,7 @@ Resources:
       KeyName: vincent@ryzen
       SecurityGroups:
       - Ref: GameServerSecurityGroup
+      IamInstanceProfile: !Ref GameServerInstanceProfile
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -xe
@@ -118,6 +182,7 @@ Resources:
                 [Service]
                 WorkingDirectory=/opt/vintagestoryserver
                 ExecStart=/usr/bin/mono VintagestoryServer.exe --dataPath /home/vintagestory/game-data
+                ExecStopPost=/usr/bin/sh -c 'cd /home/vintagestory/game-data; tar -cf - *|aws s3 cp - s3://${GameSavesBackupBucket}/${DuckdnsDomain}.tar.gz'
                 Restart=always
                 RestartSec=30
                 StandardOutput=syslog
