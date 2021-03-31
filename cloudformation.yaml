@@ -124,7 +124,7 @@ Resources:
            sudo systemctl start shutdown-if-idle.service
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName}
+          Value: !Sub ${DuckdnsDomain}.duckdns.org
 
     Metadata: 
       AWS::CloudFormation::Init:
@@ -184,7 +184,7 @@ Resources:
                 [Service]
                 WorkingDirectory=/opt/vintagestoryserver
                 ExecStart=/usr/bin/mono VintagestoryServer.exe --dataPath /home/vintagestory/game-data
-                ExecStopPost=/usr/bin/sh -c 'cd /home/vintagestory/game-data; tar -cf - *|aws s3 cp - s3://${GameSavesBackupBucket}/${DuckdnsDomain}.tar.gz'
+                ExecStopPost=/usr/bin/sh -c 'cd /home/vintagestory/game-data; tar -czf - *|aws s3 cp - s3://${GameSavesBackupBucket}/vintagestory-server-${DuckdnsDomain}.duckdns.org.tar.gz'
                 Restart=always
                 RestartSec=30
                 StandardOutput=syslog
