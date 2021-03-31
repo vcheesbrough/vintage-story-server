@@ -120,6 +120,8 @@ Resources:
            sudo systemctl restart rsyslog.service
            sudo systemctl enable vintagestoryserver.service
            sudo systemctl start vintagestoryserver.service
+           sudo systemctl enable shutdown-if-idle.service
+           sudo systemctl start shutdown-if-idle.service
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}
@@ -228,6 +230,65 @@ Resources:
               mode: "000700"
               owner: "vintagestory"
               group: "vintagestory"
+            /usr/lib/systemd/system/shutdown-if-idle.service:
+              content: !Sub |
+                [Unit]
+                Description=Shut machine down after an hour if no users on vintage story
+                After=network.target
+                
+                [Service]
+                WorkingDirectory=/home/ec2-user
+                ExecStart=/bin/sh -c "/home/ec2-user/shutdown-if-idle.sh"
+                Restart=always
+                RestartSec=30
+                StandardOutput=syslog
+                StandardError=syslog
+                SyslogIdentifier=shutdown-if-idle
+                User=ec2-user
+                Group=ec2-user
+                
+                [Install]
+                WantedBy=multi-user.target                
+              mode: "000644"
+              owner: "ec2-user"
+              group: "ec2-user"
+            /home/ec2-user/shutdown-if-idle.sh:
+              content: !Sub |
+                #!/bin/bash
+
+                shutdown_idle_seconds=3600
+
+                while true; do
+                  last_inactivity_time=`sudo grep -P "(All clients disconnected, pausing game calendar)|(Server logger started)" /var/log/vintagestory-server/info.log \
+                          |awk '{print $1, $2, $3}' \
+                          |tail -1`
+                  last_activity_time=`sudo grep -P "A client reconnected, resuming game calendar" /var/log/vintagestory-server/info.log \
+                          |awk '{print $1, $2, $3}' \
+                          |tail -1`
+
+                  now=`date +%s`
+
+                  seconds_since_inactivity=$(( $now - `date -d "$last_inactivity_time" +%s`))
+                  seconds_since_activity=$(( $now - `date -d "$last_activity_time" +%s` ))
+
+                  if (( $seconds_since_inactivity < $seconds_since_activity ))
+                  then
+                          echo No active clients $seconds_since_inactivity
+                          if (( $seconds_since_inactivity > $shutdown_idle_seconds ))
+                          then
+                                  sudo shutdown now
+                          else
+                                  echo No active clients $shutdown_idle_seconds seconds not elapsed \($seconds_since_inactivity\)
+                          fi
+                  else
+                          echo Clients are active $seconds_since_inactivity seconds
+                  fi
+                  sleep 1m
+                done
+                         
+              mode: "000700"
+              owner: "ec2-user"
+              group: "ec2-user"
           commands:
             start-duckdns:
               command: "sudo systemctl enable duckdns.service;sudo systemctl start duckdns.service"
