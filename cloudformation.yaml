@@ -257,6 +257,7 @@ Resources:
                 #!/bin/bash
 
                 shutdown_idle_seconds=3600
+                sleep 10m
 
                 while true; do
                   last_inactivity_time=`sudo grep -P "(All clients disconnected, pausing game calendar)|(Server logger started)" /var/log/vintagestory-server/info.log \
